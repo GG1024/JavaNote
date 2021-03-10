@@ -90,19 +90,86 @@
 
     偏向锁适用于单线程竞争资源，如果其他线程获取该锁对象升级为轻量级锁，多线程获取同一个锁，但是之间可能没有竞争，它使用CAS操作，无需向系统互斥，可以避免从用户态到内核态
 
-# Lock接口
-
-# 线程间的通信
-
 # 8锁分析
 
 # 谈谈synchronized关键字
 
-# 了解并深入AQS，不入虎穴，焉得offer
+**synchronized关键字解决的是多个线程之间访问资源的同步性，synchronized关键字可以保证被他修饰的方法或者代码块在任意时刻只能有一个线程执行**
+
+##### 你是怎么使用synchronized关键字的？
+
+1. **修饰实例方法**：作用于当前对象实例加锁，进入同步代码前需要获得当前对象实例的锁
+2. **修饰静态方法**：是给当前类加锁，会作用于类的所有对象实例，因为静态成员不属于任何一个实例对象，是类的成员。如果一个线程A调用一个实例对象的非静态synchronized方法，而线程B需要调用这个实例对象的静态synchronized方法，是允许的不会产生互斥，**因为访问静态synchronized方法占用的是当前类的锁，而非访问非静态synchronized方法占用的锁是当前实例对象的锁**
+3. **修饰代码块**：指定加锁对象，对给定对象加锁，进入同步代码库前要获得给定对象的锁
+
+对synchronized关键字修饰的总结：synchronized关键字加到static静态方法和synchronized（class）代码块都是给Class类上锁；synchronized关键字加到实例方法上是给实例对象上锁，**尽量不要使用synchronized（String a)因为JVM中，字符串常量池具有缓存功能**
+
+##### 手写一个双重检验锁方式的单例模式，说说原理
+
+`public class Singleton{
+
+​			private volatile static Singleton uniqueInstance;
+
+​			private Singleton(){}
+
+​			public static Singleton getUniqueInstance(){
+
+​				//判断对象是否已经实例化过，没有实例化进入加锁代码
+
+​				if(uniqueInstance==null){
+
+​					//类对象加锁
+
+​					synchronized(Singleton.class){
+
+​						if(uniqueInstance==null){
+
+​							uniqueInstance = new Singleton();
+
+​						}
+
+​					}
+
+​				}
+
+​				return uniqueInstance;
+
+​			}
+
+}`
+
+##### synchronized关键字底层的一些原理-->属于JVM层面
+
+- synchronized同步语句块的情况：查看Java类中使用了synchronized关键字修饰的方法，编译后查看字节码；**synchronized同步语句块的实现使用的是monitorenter和monitorexit指令，其中monitorenter指向同步代码块的开始位置，monitorexit指向同步代码块的结束位置**，当执行monitorenter指令时，线程试图获取锁也就是monitor（monitor对象存在于每个Java对象的对象头中）持有权，当计数器为0则获取锁 成功，获取之后将计数器设为1也就是+1；相应的执行monitorexit指令之后，将计数器设为0，表明锁被释放；如果获取对象锁失败，那当前线程就要阻塞等待，直到锁被另外一个线程释放为止。
+- synchronized修饰方法的情况：synchronized修饰的方法并没有monitorenter和monitorexit指令，取而代之的时ACC_SYNCHRONIZED标识，该标识指明了该方法是一个同步方法，JVM通过该ACC_SYNCHRONIZED访问标识来辨别一个方法是否为同步方法，从而执行相应的同步调用。
+
+##### jdk1.6对synchronized关键字做了哪些优化
+
+- 锁主要有四种状态，**依次升级不可以降级：无锁状态>偏向锁>轻量级锁>重量级锁**
+
+##### synchronized和ReentrantLock的区别
+
+1. 两者都是 **可重入锁**
+2. synchronized依赖于JVM，ReeentrantLock依赖于API
+   1. synchronized是依赖于JVM实现的，Java虚拟机在JDK1.6时对synchronized做了很多优化，都是在虚拟机层面实现，没有直接暴露给应用程序。
+   2. ReentrantLock是JDK层面实现的（API接口），需要lock（），unlock（）方法配合try/finally语句块来完成
+3. ReentrantLock比synchronized增加了一些高级功能
+   1. **等待可中断**：通过lock.lockInterruptibly()方法实现正在等待的线程可以选择放弃等待，改为处理其他事情。
+   2. **实现公平锁**：Reentrant Lock可以指定公平锁和非公平锁；而synchronized关键字只能是非公平锁，所谓的公平锁就是先等待的线程先获得锁。**ReentrantLock默认是非公平锁，可以通过ReentrantLock类ReentrantLock(boolean fair)构造指定是否公平**
+   3. **可实现选择性通知**：synchronized关键字与wait()和notify()/notifyAll()方法相结合实现等待/通知机制，ReentrantLock类借助于Condition接口与newCondition()方法可以实现多路通知功能，在一个Lock对象中创建多个Condition实例，**线程对象可以注册在指定的Condition中，从而有选择性的进行线程通知，在调度线程上更加灵活；在使用notify()/notifyAll()方法进行通知时，被通知的线程是由JVM选择的，用Reentrant Lock类结合Condition实例可以实现“选择性通知”**。synchronized关键字就相当于整个lock对象中只有Condition实例，所有的线程注册在它一个身上，执行notifyAll()方法就会通知所有处于等待的线程造成效率问题，而Condition实例的signalAll()方法只会唤醒注册在该Condition实例中的所有线程
+4. synchronized会自动释放锁，lock必须手动释放锁
+5. synchronized时不可中断，lock可以中断也可不中断
+6. 通过lock可以知道线程有没有拿到锁，synchronized不可以
+7. synchronized能锁住方法和代码块，lock只能锁代码块
+8. lock可以使用读锁提高多线程效率
+
+# 深挖synchronized关键字
+
+# volatile必须吹半个小时
 
 # 谈谈Threadlocal线程本地存储
 
-# 既然谈了AQS，volatile必须吹半个小时
+# 了解并深入AQS，不入虎穴，焉得offer
 
 # Callable接口和异步回调
 
