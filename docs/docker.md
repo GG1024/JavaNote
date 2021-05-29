@@ -983,6 +983,205 @@ ERRO[0000] error waiting for container: context canceled
 
 docker命令最好的学习就是对比测试结果
 
+## 练习：Tomcat镜像
 
+1、准备镜像文件，jdk1.8,tomcat 
+
+![image-20210517111013087](images/image-20210517111013087.png)
+
+2、编写DockerFile文件,官方命名 **Dockerfile** build会自动寻找这个文件，就不需要-f指定
+
+```
+### DockerFile 内容
+
+FROM centos
+MAINTAINER xiaoguang<1024@163.com>
+
+COPY readme.txt /usr/local/readme.txt
+
+ADD jdk1.8.0_131.tar.gz /usr/local/
+ADD apache-tomcat-9.0.46.tar.gz /usr/local/
+
+RUN yum -y install vim
+
+ENV MYPATH /usr/local
+WORKDIR $MYPATH
+
+ENV JAVA_HOME /usr/local/jdk1.8.0_131
+ENV CLASSPATH $JAVA_HOME/lib/dt.jar:$JAVA_HOME/lib/tools.jar
+ENV CATALINA_HOME /usr/local/apache-tomcat-9.0.46
+ENV CATALINA_BASH /usr/local/apache-tomcat-9.0.46
+
+ENV PATH $PATH:$JAVA_HOME/bin:$CATALINA_HOME/lib:$CATALINA_HOME/bin
+
+EXPOSE 8080
+
+CMD /usr/local/apache-tomcat-9.0.46/bin/startup.sh && tail -F /usr/local/apache-tomcat-9.0.46/bin/logs/catalina.out
+
+```
+
+3、构建镜像
+
+```shell
+docker build -t diytomcat .
+```
+
+4、启动镜像
+
+```shell
+docker run -d -p 9090:8080 --name=xgdiytomcat -v /buildImages/tomcat/test:/usr/local/apache-tomcat-9.0.46/webapps/test -v /buildImages/tomcat/tomcatlogs:/usr/local/apache-tomcat-9.0.46/logs diytomcat
+```
+
+5、访问测试
+
+![image-20210517115621636](images/image-20210517115621636.png)
+
+6、发布镜像（由于做了卷挂载，我们直接在本地编写项目就可发布）
+
+在本地添加一个界面，进行测试访问
+
+```shell
+<?xml version="1.0" encoding="UTF-8"?>
+<web-app xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://java.sun.com/xml/ns/javaee" xmlns:web="http://java.sun.com/xml/ns/javaee/web-app_2_5.xsd" xsi:schemaLocation="http://java.sun.com/xml/ns/javaee http://java.sun.com/xml/ns/javaee/web-app_2_5.xsd" id="WebApp_ID" version="2.5">
+  <welcome-file-list>
+    <welcome-file>index.html</welcome-file>
+    <welcome-file>index.htm</welcome-file>
+    <welcome-file>index.jsp</welcome-file>
+    <welcome-file>default.html</welcome-file>
+    <welcome-file>default.htm</welcome-file>
+    <welcome-file>default.jsp</welcome-file>
+  </welcome-file-list>
+</web-app>
+```
+
+```shell
+<%@ page language="java" contentType="text/html; charset=UTF-8"
+    pageEncoding="UTF-8"%>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Hello MyDiy Docker Images</title>
+</head>
+<body>
+Hello World!<br/>
+ <h2>Hello MyDiy Docker Images</h2>    
+<%
+ System.out.println("------my diy tomcat images");
+%>
+</body>
+</html>
+```
+
+## 发布自己的镜像
+
+> DockerHub
+
+1、www.hub.docker.com 注册自己的账号
+
+2、在该网站并且可以登录
+
+![image-20210518191412654](images/image-20210518191412654.png)
+
+3、服务器上提交自己的镜像
+
+![image-20210518191622585](images/image-20210518191622585.png)
+
+4、登录完毕，docker push 镜像
+
+```shell
+
+### push镜像的问题
+[root@lucky lucky]# docker push ouyangxiaoguang/diytomcat:1.0
+The push refers to repository [docker.io/ouyangxiaoguang/diytomcat]
+An image does not exist locally with the tag: ouyangxiaoguang/diytomcat
+
+### 解决 增加一个tag
+[root@lucky lucky]# docker tag 81200ec60af4 xiaoguang/diytomcat:1.0
+
+### push
+[root@lucky lucky]# docker push xiaoguang/diytomcat:1.0
+The push refers to repository [docker.io/xiaoguang/diytomcat]
+46c29143676e: Preparing 
+3856fad23a2f: Preparing 
+13504f11e379: Preparing 
+a24b74fbc08e: Preparing 
+2653d992f4ef: Preparing 
+denied: requested access to the resource is denie ##拒绝
+
+```
+
+> 发布阿里云镜像仓库
+
+1、登录阿里云中心
+
+2、找到容器镜像服务
+
+![image-20210518193044146](images/image-20210518193044146.png)
+
+3、创建命名空间
+
+![image-20210518193221841](images/image-20210518193221841.png)
+
+4、创建镜像仓库
+
+![image-20210518193528603](images/image-20210518193528603.png)
+
+5、浏览基本信息
+
+![image-20210518193550114](images/image-20210518193550114.png)
+
+
+
+6、发布阿里云
+
+![image-20210518195500739](images/image-20210518195500739.png)
+
+![image-20210518195448463](images/image-20210518195448463.png)
+
+## 小结
+
+![image-20210518195818344](images/image-20210518195818344.png)
 
 # Docker网络
+
+## 理解Docker0
+
+清空所有镜像和容器
+
+![image-20210518200632264](images/image-20210518200632264.png)
+
+三个网络
+
+```shell
+### 问题：docker是如何处理容器网络访问的？
+```
+
+<img src="images/image-20210518200922497.png" alt="image-20210518200922497" style="zoom:200%;" />
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
