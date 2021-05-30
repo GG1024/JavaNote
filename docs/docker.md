@@ -1159,29 +1159,417 @@ denied: requested access to the resource is denie ##拒绝
 
 <img src="images/image-20210518200922497.png" alt="image-20210518200922497" style="zoom:200%;" />
 
+```shell
+
+
+###查看容器的内部网络地址  ip addr  发现容器启动的时候会得到 eth0@if7 IP地址 docker分配的
+[root@lucky ~]# docker exec -it  tomcat01 ip addr
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+6: eth0@if7: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 172.17.0.2/16 brd 172.17.255.255 scope global eth0
+       valid_lft forever preferred_lft forever
+
+##Linux 能不能ping通容器内部
+[root@lucky ~]# ping 172.17.0.2
+PING 172.17.0.2 (172.17.0.2) 56(84) bytes of data.
+64 bytes from 172.17.0.2: icmp_seq=1 ttl=64 time=0.106 ms
+64 bytes from 172.17.0.2: icmp_seq=2 ttl=64 time=0.090 ms
+
+### Linux 可以ping通容器内部
+```
+
+>原理
+
+1、我们每启动一个docker容器，docker就会给docker分配一个IP，我们只要安装了docker，就会有一个docker0桥接模式，使用的技术是evth-pair技术
+
+![image-20210530142109138](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530142109138.png)
+
+2、在启动一个容器测试，发现又多了一对网卡 
+
+![image-20210530142232537](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530142232537.png)
+
+```shell
+### 我们发现这个容器带来网卡，都是一对一对的
+### evth-pair 就是一对虚拟的设备接口，他们都是成对出现的，一段连着协议，一段彼此相连
+### 正因为有这个特性，evth-pair充当一个桥梁，连接各种虚拟网络设备
+### OpenStac,Docker 容器之间的联系 ，ovs的连接，都是使用evth-pair技术
+```
+
+3、测试Tomcat01 ping Tomcat02是否可以ping通
+
+```shell
+[root@lucky ~]# docker exec -it tomcat02 ping 172.17.0.2
+PING 172.17.0.2 (172.17.0.2) 56(84) bytes of data.
+64 bytes from 172.17.0.2: icmp_seq=1 ttl=64 time=0.118 ms
+64 bytes from 172.17.0.2: icmp_seq=2 ttl=64 time=0.065 ms
+64 bytes from 172.17.0.2: icmp_seq=3 ttl=64 time=0.109 ms
+```
+
+网络模型图
+
+![image-20210530144237676](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530144237676.png)
+
+结论：Tomcat01和Tomcat02是公用的一个路由器，docker0，所有的容器不指定网络的情况下，都是docker0路由的，docker会给我们的容器分配一个默认的IP
+
+>小结
+
+docker使用的是Linux的桥接，宿主机中是一个docker0容器的网桥；
+
+![image-20210530145313828](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530145313828.png)
+
+docker中所有的网络接口都是虚拟的，虚拟的转发效率高（内网传递文件）
+
+只要容器删除，对应的网桥一对就没了！！！
+
+## --link
+
+> 思考一个场景，编写一个微服务，database url =ip,项目不重启，数据库IP换掉了，处理这个问题可以使用名字来访问容器。
+
+```shell
+[root@lucky ~]# docker exec -it tomcat01 ping tomcat02
+ping: tomcat02: Name or service not known
+
+#如何可以解决呢？
+#通过--link既可以解决了网络连通问题
+[root@lucky ~]# docker run -d -P --name=tomcat03 --link tomcat02 tomcat
+411a376dd42f796ab195ba0cb493ac6a1c17f027024c1ced40f00de2f23dd9fa
+[root@lucky ~]# docker exec -it tomcat03 ping tomcat02
+PING tomcat02 (172.17.0.3) 56(84) bytes of data.
+64 bytes from tomcat02 (172.17.0.3): icmp_seq=1 ttl=64 time=0.133 ms
+64 bytes from tomcat02 (172.17.0.3): icmp_seq=2 ttl=64 time=0.064 ms
+64 bytes from tomcat02 (172.17.0.3): icmp_seq=3 ttl=64 time=0.064 ms
+64 bytes from tomcat02 (172.17.0.3): icmp_seq=4 ttl=64 time=0.059 ms
+
+##可以反向ping通吗？
+[root@lucky ~]# docker exec -it tomcat02 ping tomcat03
+ping: tomcat03: Name or service not known
+```
+
+其实Tomcat03就是在本地配置了Tomcat02的配置
+
+```shell
+[root@lucky ~]# docker exec -it tomcat03 cat /etc/hosts
+127.0.0.1	localhost
+::1	localhost ip6-localhost ip6-loopback
+fe00::0	ip6-localnet
+ff00::0	ip6-mcastprefix
+ff02::1	ip6-allnodes
+ff02::2	ip6-allrouters
+172.17.0.3	tomcat02 60e3804625ab
+172.17.0.4	411a376dd42f
+```
+
+本质探究：--link就是我们在hosts配置中增加了一个172.17.0.3	tomcat02 60e3804625ab
+
+工作使用docker不建议使用--link！！！
+
+自定义网络，不适用于docker0
+
+docker0问题：他不支持容器名连接访问
+
+## 自定义网络
+
+> 查看所有的docker网络
+
+![image-20210530151832911](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530151832911.png)
+
+网络模式
+
+bridge：桥接docker默认，自己创建也使用bridge
+
+none：不配置网络
+
+host：和宿主机共享网络
+
+container：容器网络连通，（用的少，局限很大）
+
+**测试**
+
+```shell
+##我们直接启动命令， --net bridge，而这个就是我们的docker0
+docker run -d -P --name=tomcat01  tomcat
+docker run -d -P --name=tomcat01 --net bridge tomcat
+
+##docker0的特点，默认，域名不能访问，--link可以打通连接
+
+##我们可以自定义网络
+##--driver bridge
+##--subnet 192.168.0.0/16
+##--gateway 192.168.0.1
+[root@lucky ~]# docker network create --driver bridge  --subnet 192.168.0.0/16 --gateway 192.168.0.1 mynet
+b06fcc7b4cec5f6dce66db51035927018b439f4f2e2f2549c89e1668669c78fe
+[root@lucky ~]# docker network ls
+NETWORK ID     NAME      DRIVER    SCOPE
+88b167a9aefb   bridge    bridge    local
+7ddbf3bd5092   host      host      local
+b06fcc7b4cec   mynet     bridge    local
+c652647c294e   none      null      local
+```
+
+![image-20210530153246609](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530153246609.png)
 
 
 
+```shell
+###创建指定自定义网络Tomcat
+[root@lucky ~]# docker run -d -P --name=tomcat-net-01 --net mynet tomcat
+[root@lucky ~]# docker run -d -P --name=tomcat-net-02 --net mynet tomcat
+
+## inspect mynet
+[root@lucky ~]# docker network inspect mynet
+[
+    {
+        "Name": "mynet",
+        "Id": "b06fcc7b4cec5f6dce66db51035927018b439f4f2e2f2549c89e1668669c78fe",
+        "Created": "2021-03-30T08:00:36.455680562+08:00",
+        "Scope": "local",
+        "Driver": "bridge",
+        "EnableIPv6": false,
+        "IPAM": {
+            "Driver": "default",
+            "Options": {},
+            "Config": [
+                {
+                    "Subnet": "192.168.0.0/16",
+                    "Gateway": "192.168.0.1"
+                }
+            ]
+        },
+        "Internal": false,
+        "Attachable": false,
+        "Ingress": false,
+        "ConfigFrom": {
+            "Network": ""
+        },
+        "ConfigOnly": false,
+        "Containers": {
+            "510c26b11fe50bb6f479c4b12d417afdf1b228f0ae29c754e5be5ec2415ff815": {
+                "Name": "tomcat-net-02",
+                "EndpointID": "2d79d74d58b48234dd93c4a80cef574aa922762dbf63e2bd17afa5e67561ce24",
+                "MacAddress": "02:42:c0:a8:00:03",
+                "IPv4Address": "192.168.0.3/16",
+                "IPv6Address": ""
+            },
+            "bba9c827ebeb4c31ccc8519fb4326176ab4fe8df03bc1b6f27bb5b1c59901e1f": {
+                "Name": "tomcat-net-01",
+                "EndpointID": "e0a02255e7448ddca8ec2387c8fa5daa9acbb05ec801a6879a2be115ed06d0ea",
+                "MacAddress": "02:42:c0:a8:00:02",
+                "IPv4Address": "192.168.0.2/16",
+                "IPv6Address": ""
+            }
+        },
+        "Options": {},
+        "Labels": {}
+    }
+]
+
+##再次测试ping连接
+[root@lucky ~]# docker exec -it tomcat-net-01 ping 192.168.0.3
+PING 192.168.0.3 (192.168.0.3) 56(84) bytes of data.
+64 bytes from 192.168.0.3: icmp_seq=1 ttl=64 time=0.132 ms
+##不用--link
+[root@lucky ~]# docker exec -it tomcat-net-02 ping tomcat-net-01
+PING tomcat-net-01 (192.168.0.2) 56(84) bytes of data.
+64 bytes from tomcat-net-01.mynet (192.168.0.2): icmp_seq=1 ttl=64 time=0.049 ms
+```
 
 
 
+## 网络连通
+
+![image-20210530155235540](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530155235540.png)
+
+![image-20210530155321318](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530155321318.png)
+
+```shell
+##测试打通 Tomcat01连接mynet
+ [root@lucky ~]# docker network connect mynet tomcat0
+## 连通之后就是将Tomcat01放到了mynet网络下？
+
+#一个容器两个IP
+```
+
+![image-20210530155714829](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530155714829.png)
+
+```shell
+[root@lucky ~]# docker exec -it tomcat01 ping tomcat-net-01
+PING tomcat-net-01 (192.168.0.2) 56(84) bytes of data.
+64 bytes from tomcat-net-01.mynet (192.168.0.2): icmp_seq=1 ttl=64 time=0.084 ms
+64 bytes from tomcat-net-01.mynet (192.168.0.2): icmp_seq=2 ttl=64 time=0.108 ms
+```
+
+## 部署Redis集群
+
+![image-20210530160440074](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210530160440074.png)
+
+```shell
+## 创建自定义网卡
+[root@lucky ~]# docker network create redis  --subnet 172.38.0.0/16
 
 
+##通过脚本创建6个Redis配置
+for port in $(seq 1 6);\
+do \
+mkdir -p /mydata/redis/node-${port}/conf
+touch /mydata/redis/node-${port}/conf/redis.conf
+cat << EOF >/mydata/redis/node-${port}/conf/redis.conf
+port 6379
+bind 0.0.0.0
+cluster-enabled yes
+cluster-config-file nodes.conf
+cluster-node-timeout 5000
+cluster-announce-ip 172.38.0.1${port}
+cluster-announce-port 6379
+cluster-announce-bus-port 16379
+appendonly yes
+EOF
+done
+
+docker run -p 637${port}:6379 -p 1637${port}:16379 --name redis-${port}\
+-v /mydata/redis/node-${port}/data:/data \
+-v /mydata/redis/node-${port}/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis -ip 172.38.0.1${port} redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
+
+docker run -p 6371:6379 -p 16371:16379 --name redis-1 \
+-v/mydata/redis/node-1/data:/data \
+-v /mydata/redis/node-1/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis  redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
+ 
+docker run -p 6372:6379 -p 16372:16379 --name redis-2 \
+-v/mydata/redis/node-2/data:/data \
+-v /mydata/redis/node-2/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis  redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
+
+docker run -p 6373:6379 -p 16373:16379 --name redis-3 \
+-v/mydata/redis/node-3/data:/data \
+-v /mydata/redis/node-3/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis  redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
+
+docker run -p 6374:6379 -p 16374:16379 --name redis-4 \
+-v/mydata/redis/node-4/data:/data \
+-v /mydata/redis/node-4/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis  redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
+
+docker run -p 6375:6379 -p 16375:16379 --name redis-5 \
+-v/mydata/redis/node-5/data:/data \
+-v /mydata/redis/node-5/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis  redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
+
+docker run -p 6376:6379 -p 16376:16379 --name redis-6 \
+-v/mydata/redis/node-6/data:/data \
+-v /mydata/redis/node-6/conf/redis.conf:/etc/redis/redis.conf \
+-d --net redis  redis:5.0.9-alpine3.11 redis-server /etc/redis/redis.conf
 
 
+##创建集群，进入redis容器中
+/data # redis-cli --cluster create 172.38.0.2:6379  172.38.0.3:6379 172.38.0.4:6379 172.38.0.5:6379 172.38.0.6:6379 172.38.0.7:6379  --cluster-replicas 1
+
+>>> Performing hash slots allocation on 6 nodes...
+Master[0] -> Slots 0 - 5460
+Master[1] -> Slots 5461 - 10922
+Master[2] -> Slots 10923 - 16383
+Adding replica 172.38.0.6:6379 to 172.38.0.2:6379
+Adding replica 172.38.0.7:6379 to 172.38.0.3:6379
+Adding replica 172.38.0.5:6379 to 172.38.0.4:6379
+M: 243852ff9f6f445afa9a55f5158de0c33957f676 172.38.0.2:6379
+   slots:[0-5460] (5461 slots) master
+M: 3e38ed7ee38df118d5d26fd366d3975301f1d861 172.38.0.3:6379
+   slots:[5461-10922] (5462 slots) master
+M: cc91a0362773458285f9198dc3d727875e1fac9e 172.38.0.4:6379
+   slots:[10923-16383] (5461 slots) master
+S: cdf9c05a4c69f108dc952d9a8701b5116f320f21 172.38.0.5:6379
+   replicates cc91a0362773458285f9198dc3d727875e1fac9e
+S: b5e0f264b73465aa3f6510674dbd46aca57b6960 172.38.0.6:6379
+   replicates 243852ff9f6f445afa9a55f5158de0c33957f676
+S: 83d06e3059bde56f706f0c99b2ed0f41a48dec79 172.38.0.7:6379
+   replicates 3e38ed7ee38df118d5d26fd366d3975301f1d861
+Can I set the above configuration? (type 'yes' to accept): yes
+>>> Nodes configuration updated
+>>> Assign a different config epoch to each node
+>>> Sending CLUSTER MEET messages to join the cluster
+Waiting for the cluster to join
+...
+>>> Performing Cluster Check (using node 172.38.0.2:6379)
+M: 243852ff9f6f445afa9a55f5158de0c33957f676 172.38.0.2:6379
+   slots:[0-5460] (5461 slots) master
+   1 additional replica(s)
+S: b5e0f264b73465aa3f6510674dbd46aca57b6960 172.38.0.6:6379
+   slots: (0 slots) slave
+   replicates 243852ff9f6f445afa9a55f5158de0c33957f676
+S: 83d06e3059bde56f706f0c99b2ed0f41a48dec79 172.38.0.7:6379
+   slots: (0 slots) slave
+   replicates 3e38ed7ee38df118d5d26fd366d3975301f1d861
+S: cdf9c05a4c69f108dc952d9a8701b5116f320f21 172.38.0.5:6379
+   slots: (0 slots) slave
+   replicates cc91a0362773458285f9198dc3d727875e1fac9e
+M: cc91a0362773458285f9198dc3d727875e1fac9e 172.38.0.4:6379
+   slots:[10923-16383] (5461 slots) master
+   1 additional replica(s)
+M: 3e38ed7ee38df118d5d26fd366d3975301f1d861 172.38.0.3:6379
+   slots:[5461-10922] (5462 slots) master
+   1 additional replica(s)
+[OK] All nodes agree about slots configuration.
+>>> Check for open slots...
+>>> Check slots coverage...
+[OK] All 16384 slots covered.
 
 
+###集群成功
+127.0.0.1:6379> cluster info
+cluster_state:ok
+cluster_slots_assigned:16384
+cluster_slots_ok:16384
+cluster_slots_pfail:0
+cluster_slots_fail:0
+cluster_known_nodes:6
+cluster_size:3
+cluster_current_epoch:6
+cluster_my_epoch:1
+cluster_stats_messages_ping_sent:82
+cluster_stats_messages_pong_sent:89
+cluster_stats_messages_sent:171
+cluster_stats_messages_ping_received:84
+cluster_stats_messages_pong_received:82
+cluster_stats_messages_meet_received:5
+cluster_stats_messages_received:171
+```
 
+## springboot项目打包docker镜像
 
+1、构建springboot项目
 
+2、打包应用
 
+3、编写dockerfile
 
+4、构建镜像
 
+5、发布运行
 
+# Docker Compose
 
+## 简介
 
+Docker
 
+Dockerfile build run 手动操作，单个容器！
 
+微服务，100个服务，依赖关系。
 
+Docker Compose来轻松高效的管理容器，定义运行多个容器。
 
+> 三步骤
 
+1、Dockerfile保证我们的项目在任何地方可以运行
+
+2、docker-compose.yml怎么写
+
+3、docker-compose up启动项目
+
+>理解
+
+Compose 是Docker官方的开源 项目，需要安装
