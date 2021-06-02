@@ -1562,7 +1562,7 @@ Dockerfile build run 手动操作，单个容器！
 
 Docker Compose来轻松高效的管理容器，定义运行多个容器。
 
-> 三步骤
+> - [ ] 三步骤
 
 1、Dockerfile保证我们的项目在任何地方可以运行
 
@@ -1573,3 +1573,4 @@ Docker Compose来轻松高效的管理容器，定义运行多个容器。
 >理解
 
 Compose 是Docker官方的开源 项目，需要安装
+
