@@ -1135,4 +1135,381 @@ public static void main(String[] args) {
 
 # SpringBoot整合
 
+## fanout 模式
+
+通用pom
+
+```java
+		<dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-amqp</artifactId>
+        </dependency>
+```
+
+生产者配置
+
+```java
+@Configuration
+public class RabbitMqConfiguration implements Serializable {
+
+    //1.声明注册fanout模式的交换机
+    @Bean
+    public FanoutExchange fanoutExchange() {
+        return new FanoutExchange("fanout_order_exchange", true, false);
+    }
+
+    //2.声明队列 sms.fanout.queue email.fanout.queue duanxin.fanout.queue
+    @Bean
+    public Queue smsQueue() {
+        return new Queue("sms.fanout.queue", true);
+    }
+
+    @Bean
+    public Queue emailQueue() {
+        return new Queue("email.fanout.queue", true);
+    }
+
+    @Bean
+    public Queue duanxinQueue() {
+        return new Queue("duanxin.fanout.queue", true);
+    }
+
+
+    //3.完成交换机与队列的绑定关系
+    @Bean
+    public Binding bindingSms() {
+        return BindingBuilder.bind(smsQueue()).to(fanoutExchange());
+    }
+
+    @Bean
+    public Binding bindingEmail() {
+        return BindingBuilder.bind(emailQueue()).to(fanoutExchange());
+    }
+
+    @Bean
+    public Binding bindingDuanxin() {
+        return BindingBuilder.bind(duanxinQueue()).to(fanoutExchange());
+    }
+
+}
+
+```
+
+生产者发送消息
+
+```
+ 	/**
+     * 模拟下单
+     */
+public void makeOrder(String userId, String productId, int num) {
+
+        //1:根据商品id查询库存是否充足
+        //2:保存订单
+        String orderId = UUID.randomUUID().toString();
+        System.out.println("订单生成成功：" + orderId);
+
+        //3.通过MQ来完成消息的分发
+        String exchangeName = "fanout_order_exchange";
+        String routingKey = "";
+        /**
+         * @param1 交换机
+         * @param2 路由Key/queue
+         * @param3 消息内容
+         */
+        rabbitTemplate.convertAndSend(exchangeName,routingKey,orderId);
+    }
+```
+
+消费者其一
+
+```java
+@Component
+@RabbitListener(queues = {"duanxin.fanout.queue"})
+public class DuanxinConsumer {
+
+    @RabbitHandler
+    public void reviceMessage(String message) {
+        System.out.println("duanxin fanout ------" + message);
+    }
+}
+```
+
+## direct模式
+
+生产者配置
+
+```java
+@Configuration
+public class DirectConfiguration implements Serializable {
+
+    //1.声明注册directt模式的交换机
+    @Bean
+    public DirectExchange directtExchange() {
+        return new DirectExchange("direct_order_exchange", true, false);
+    }
+
+    //2.声明队列 sms.direct.queue email.direct.queue duanxin.direct.queue
+    @Bean
+    public Queue smsDirectQueue() {
+        return new Queue("sms.direct.queue", true);
+    }
+
+    @Bean
+    public Queue emailDirectQueue() {
+        return new Queue("email.direct.queue", true);
+    }
+
+    @Bean
+    public Queue duanxinDirectQueue() {
+        return new Queue("duanxin.direct.queue", true);
+    }
+
+
+    //3.完成交换机与队列的绑定关系
+    @Bean
+    public Binding bindingSmsDirect() {
+        return BindingBuilder.bind(smsDirectQueue()).to(directtExchange()).with("sms");
+    }
+
+    @Bean
+    public Binding bindingEmailDirect() {
+        return BindingBuilder.bind(emailDirectQueue()).to(directtExchange()).with("email");
+    }
+
+    @Bean
+    public Binding bindingDuanxinDirect() {
+        return BindingBuilder.bind(duanxinDirectQueue()).to(directtExchange()).with("duanxin");
+    }
+
+}
+```
+
+消费者其一
+
+```java
+@Component
+@RabbitListener(queues = {"duanxin.direct.queue"})
+public class DuanxinDirectConsumer {
+
+    @RabbitHandler
+    public void reviceMessage(String message) {
+        System.out.println("duanxin direct ------" + message);
+    }
+}
+```
+
+## topic模式
+
+生产者
+
+```java
+public void makeOrderTopic(String userId, String productId, int num) {
+
+        //1:根据商品id查询库存是否充足
+        //2:保存订单
+        String orderId = UUID.randomUUID().toString();
+        System.out.println("订单生成成功：" + orderId);
+
+        //3.通过MQ来完成消息的分发
+        String exchangeName = "topic_order_exchange";
+        String routingKey = "com.email.duanxin.xxx";
+        /**
+         * #.duanxin.#
+         * *.email.#
+         * com.#
+         */
+        rabbitTemplate.convertAndSend(exchangeName,routingKey,orderId);
+}
+```
+
+消费者其一
+
+```java
+@Component
+@RabbitListener(bindings = @QueueBinding(
+        value = @Queue(value = "email.topic.queue", declare = "true", autoDelete = "false"),
+        exchange = @Exchange(value = "topic_order_exchange", type = ExchangeTypes.TOPIC),
+        key = "*.email.#"
+)
+)
+public class EmailTopicConsumer {
+
+    @RabbitHandler
+    public void reviceMessage(String message) {
+        System.out.println("email topic ------" + message);
+    }
+
+}
+```
+
+
+
 # 高级特性
+
+## 过期时间TTL
+
+过期时间TTL表示可以对消息设置预期的时间，在这个时间内都可以被消费者接收获取，过了之后消息将被自动删除，RabbitMq可以对消息队列设置TTL。
+
+1.通过队列属性设置，队列中所有消息都有相同的过期的时间
+
+2.对消息单独设置，每条消息TTL可以不同
+
+上面两种方法同时使用，则消息的过期时间，以两者之间TTL较小的那个数值为准，消息在队列的生存时间一旦超过设置的TTL值，就称为dead message被投递到死信队列。消费者无法再消费到该消息。
+
+![image-20210606152645305](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210606152645305.png)
+
+> 队列设置TTL
+
+```java
+@Configuration
+public class TtlDirectConfiguration implements Serializable {
+
+    //1.声明注册directt模式的交换机
+    @Bean
+    public DirectExchange ttlDirecttExchange() {
+        return new DirectExchange("ttl_direct_exchange", true, false);
+    }
+    //2.声明队列 队列的过期时间
+    @Bean
+    public Queue ttlDirectQueue() {
+        Map<String, Object> args = new HashMap<>();
+        args.put("x-message-ttl", 5000);
+        return new Queue("ttl.direct.queue", true,false,false,args);
+    }
+    //3.完成交换机与队列的绑定关系
+    @Bean
+    public Binding bindingTTLDirect() {
+        return BindingBuilder.bind(ttlDirectQueue()).to(ttlDirecttExchange()).with("ttl");
+    }
+}
+
+
+//生产者
+public void makeOrderTTl(String userId, String productId, int num) {
+
+        //1:根据商品id查询库存是否充足
+        //2:保存订单
+        String orderId = UUID.randomUUID().toString();
+        System.out.println("订单生成成功：" + orderId);
+
+        //3.通过MQ来完成消息的分发
+        String exchangeName = "ttl_direct_exchange";
+        String routingKey = "ttl";
+        /**
+         * #.duanxin.#
+         * *.email.#
+         * com.#
+         */
+        rabbitTemplate.convertAndSend(exchangeName, routingKey, orderId);
+}
+```
+
+> 对消息进行单独设置
+
+```java
+ 	@Bean
+    public Queue ttlMessageDirectQueue() {
+        return new Queue("ttl.message.direct.queue", true);
+    }
+
+    @Bean
+    public Binding bindingTTLMessageDirect() {
+        return BindingBuilder.bind(ttlMessageDirectQueue()).to(ttlDirecttExchange()).with("ttlmessage");
+    }
+
+//生产者
+public void makeOrderTTlMassage(String userId, String productId, int num) {
+
+        //1:根据商品id查询库存是否充足
+        //2:保存订单
+        String orderId = UUID.randomUUID().toString();
+        System.out.println("订单生成成功：" + orderId);
+
+        //3.通过MQ来完成消息的分发
+        String exchangeName = "ttl_direct_exchange";
+        String routingKey = "ttlmessage";
+        //给消息设置过期时间
+        MessagePostProcessor messagePostProcessor = new MessagePostProcessor() {
+            @Override
+            public Message postProcessMessage(Message message) throws AmqpException {
+                message.getMessageProperties().setExpiration("5000");
+                message.getMessageProperties().setContentEncoding("UTF-8");
+                return message;
+            }
+        };
+        rabbitTemplate.convertAndSend(exchangeName, routingKey, orderId,messagePostProcessor);
+    }
+```
+
+## 死信队列
+
+DLX，死信交换机，当消息在一个队列中变成死信之后，它能被重新发送到另外一个交换机中，这个交换机就是DLX，绑定DLX的队列就称之为死信队列。消息变成死信以下原因造成：
+
+1.消息被拒绝
+
+2.消息过期
+
+3.队列达到最大长度
+
+死信队列配置
+
+```java
+@Configuration
+public class DeadRabbitMqConfiguration implements Serializable {
+
+    @Bean
+    public DirectExchange deadDirect() {
+        return new DirectExchange("dead_direct_exchange", true, false);
+    }
+
+    @Bean
+    public Queue deadQueue() {
+        return new Queue("dead.direct.queue", true);
+    }
+    @Bean
+    public Binding deadBinding() {
+        return BindingBuilder.bind(deadQueue()).to(deadDirect()).with("dead");
+    }
+
+}
+```
+
+关联配置
+
+```java
+    //1.声明注册directt模式的交换机
+    @Bean
+    public DirectExchange ttlDirecttExchange() {
+        return new DirectExchange("ttl_direct_exchange", true, false);
+    }
+
+    //2.声明队列 队列的过期时间
+    @Bean
+    public Queue ttlDirectQueue() {
+        Map<String, Object> args = new HashMap<>();
+        //队列过期时间
+        args.put("x-message-ttl", 5000);
+        //队列最大长度
+        args.put("x-max-length", 5);
+        //死信队列
+        args.put("x-dead-letter-exchange", "dead_direct_exchange");
+        args.put("x-dead-letter-routing-key", "dead");
+        return new Queue("ttl.direct.queue", true, false, false, args);
+    }
+
+    //3.完成交换机与队列的绑定关系
+    @Bean
+    public Binding bindingTTLDirect() {
+        return BindingBuilder.bind(ttlDirectQueue()).to(ttlDirecttExchange()).with("ttl");
+    }
+```
+
+# 内存磁盘的监控
+
+![image-20210606161357717](C:\Users\欧阳小广\AppData\Roaming\Typora\typora-user-images\image-20210606161357717.png)
+
+当内存使用超过配置的阈值或者磁盘空间剩余空间对于配置阈值时，RabbitMq会暂时阻塞客户端的连接，并且停止接收从客户端发来的消息，一次避免服务器的崩溃，客户端与服务端的心态检测机制也会失效。
+
+# Docker 安装RabbitMq集群
+
+# 分布式事务
